@@ -292,133 +292,111 @@ h1 .cur { animation: blink 1.1s steps(1) infinite; }
 </script>
 <script>
 (function () {
-  var Music = (function () {
-    var ac, master, bus, delay, timer, nextT = 0, step = 0, last = -1, playing = false;
-    var BPM = 66, beat = 60 / BPM;
-    var chords = [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 60], [48, 52, 55, 59]];
-    var pent = [72, 74, 76, 79, 81, 84, 67, 69];
-    function f(m) { return 440 * Math.pow(2, (m - 69) / 12); }
-    function impulse(sec) {
-      var n = (ac.sampleRate * sec) | 0, b = ac.createBuffer(2, n, ac.sampleRate);
-      for (var ch = 0; ch < 2; ch++) {
-        var d = b.getChannelData(ch);
-        for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2.6);
-      }
-      return b;
-    }
-    function init() {
-      ac = new (window.AudioContext || window.webkitAudioContext)();
-      master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
-      var dry = ac.createGain(); dry.gain.value = 0.8; dry.connect(master);
-      var verb = ac.createConvolver(); verb.buffer = impulse(3.2);
-      var vg = ac.createGain(); vg.gain.value = 0.55; verb.connect(vg); vg.connect(master);
-      bus = ac.createGain(); bus.connect(dry); bus.connect(verb);
-      delay = ac.createDelay(2); delay.delayTime.value = beat * 0.75;
-      var fb = ac.createGain(); fb.gain.value = 0.38;
-      var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1800;
-      delay.connect(lp); lp.connect(fb); fb.connect(delay); lp.connect(bus);
-    }
-    function pad(m, t, dur) {
-      var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
-      var g = ac.createGain();
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(0.03, t + 1.8);
-      g.gain.setValueAtTime(0.03, t + dur);
-      g.gain.linearRampToValueAtTime(0, t + dur + 2.5);
-      lp.connect(g); g.connect(bus);
-      [-5, 5].forEach(function (dc) {
-        var o = ac.createOscillator(); o.type = 'triangle'; o.frequency.value = f(m); o.detune.value = dc;
-        o.connect(lp); o.start(t); o.stop(t + dur + 2.6);
-      });
-    }
-    function bass(m, t, dur) {
-      var o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'sine'; o.frequency.value = f(m - 12);
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(0.09, t + 0.08);
-      g.gain.linearRampToValueAtTime(0, t + dur);
-      o.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + 0.05);
-    }
-    function pluck(m, t) {
-      var o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'triangle'; o.frequency.value = f(m);
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.05, t + 0.012);
-      g.gain.exponentialRampToValueAtTime(0.0008, t + 2.2);
-      o.connect(g); g.connect(bus); g.connect(delay);
-      o.start(t); o.stop(t + 2.3);
-    }
-    function tick() {
-      while (nextT < ac.currentTime + 0.7) {
-        var bar = Math.floor(step / 16) % 4, pos = step % 16;
-        if (pos === 0) {
-          chords[bar].forEach(function (m) { pad(m, nextT, beat * 8); });
-          bass(chords[bar][0], nextT, beat * 7.5);
-        }
-        var p = pos === 0 ? 0.5 : (pos % 2 === 0 ? 0.26 : 0.12);
-        if (Math.random() < p) {
-          var m;
-          do { m = pent[(Math.random() * pent.length) | 0]; } while (m === last);
-          last = m; pluck(m, nextT);
-        }
-        step++; nextT += beat / 2;
-      }
-    }
-    // iPhone mutes Web Audio when the ring/silent switch is on. Asking for the "playback"
-    // audio session (newer iOS) or keeping a silent media element playing (older iOS) lifts that.
-    var keeper;
-    function silentWav() {
-      var n = 8000, b = new ArrayBuffer(44 + n), v = new DataView(b);
-      function w(o, str) { for (var i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); }
-      w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
-      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-      v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
-      w(36, 'data'); v.setUint32(40, n, true);
-      for (var i = 0; i < n; i++) v.setUint8(44 + i, 128);
-      return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
-    }
-    function unlock() {
-      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
-      try {
-        if (!keeper) { keeper = new Audio(silentWav()); keeper.loop = true; keeper.setAttribute('playsinline', ''); }
-        var pr = keeper.play(); if (pr && pr.catch) pr.catch(function () {});
-      } catch (e) {}
-    }
-    return {
-      state: function () { return ac ? ac.state : 'none'; },
-      start: function () {
-        unlock();
-        if (!ac) init();
-        ac.resume();
-        nextT = ac.currentTime + 0.1; step = 0;
-        clearInterval(timer); timer = setInterval(tick, 120); tick();
-        master.gain.cancelScheduledValues(ac.currentTime);
-        master.gain.setTargetAtTime(0.55, ac.currentTime, 0.6);
-        playing = true;
-      },
-      stop: function () {
-        playing = false; clearInterval(timer);
-        master.gain.cancelScheduledValues(ac.currentTime);
-        master.gain.setTargetAtTime(0, ac.currentTime, 0.25);
-        setTimeout(function () { if (!playing) { ac.suspend(); if (keeper) keeper.pause(); } }, 1200);
-      }
-    };
-  })();
+  // Background track: "Chill Lofi" by zephiramusic (Pixabay Content License), edited into a
+  // bar-aligned loop with a one-bar crossfade, so the end flows straight back into the start.
+  // Web Audio plays the loop sample-accurately (a plain <audio loop> leaves a small gap).
+  var SRC = '/audio/chill-lofi.mp3', LOOP_SECONDS = 94.338005, VOLUME = 0.7;
+  var btn = document.getElementById('music'), label = document.getElementById('mlabel');
+  var ac = null, gain = null, loading = null, started = false, on = false, keeper = null, fallback = null;
 
-  var btn = document.getElementById('music'), label = document.getElementById('mlabel'), on = false;
-  function show(v) {
-    on = v;
-    btn.classList.toggle('on', on);
+  function show(state) {
+    on = state === 'on' || state === 'loading';
+    btn.classList.toggle('on', state === 'on');
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    label.textContent = on ? 'MUSIC ON' : 'MUSIC OFF';
+    label.textContent = state === 'on' ? 'MUSIC ON' : state === 'loading' ? 'LOADING' : state === 'retry' ? 'TAP AGAIN' : 'MUSIC OFF';
   }
-  btn.addEventListener('click', function () {
+
+  // iPhone mutes Web Audio while the silent switch is on; asking for the "playback" session
+  // (newer iOS) or keeping a silent media element running (older iOS) lifts that.
+  function silentWav() {
+    var n = 8000, b = new ArrayBuffer(44 + n), v = new DataView(b);
+    function w(o, str) { for (var i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); }
+    w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+    w(36, 'data'); v.setUint32(40, n, true);
+    for (var i = 0; i < n; i++) v.setUint8(44 + i, 128);
+    return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+  }
+  function unlock() {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
     try {
-      if (on) { Music.stop(); show(false); return; }
-      Music.start(); show(true);
-      // if the browser still refuses to play, say so instead of claiming the music is on
-      setTimeout(function () { if (on && Music.state() !== 'running') { Music.stop(); show(false); label.textContent = 'TAP AGAIN'; } }, 700);
-    } catch (e) { show(false); }
+      if (!keeper) { keeper = new Audio(silentWav()); keeper.loop = true; keeper.setAttribute('playsinline', ''); }
+      var pr = keeper.play(); if (pr && pr.catch) pr.catch(function () {});
+    } catch (e) {}
+  }
+
+  // decoders may add a few ms of silence before the first sample; skip it so the loop lines up
+  function firstSound(buf) {
+    var L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    var lim = Math.min(L.length, Math.floor(buf.sampleRate * 0.25));
+    for (var i = 0; i < lim; i++) if (Math.abs(L[i]) > 1e-4 || Math.abs(R[i]) > 1e-4) return i / buf.sampleRate;
+    return 0;
+  }
+
+  function load() {
+    if (loading) return loading;
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    gain = ac.createGain(); gain.gain.value = 0; gain.connect(ac.destination);
+    loading = fetch(SRC).then(function (r) { if (!r.ok) throw new Error('fetch'); return r.arrayBuffer(); })
+      .then(function (data) { return new Promise(function (res, rej) { ac.decodeAudioData(data, res, rej); }); })
+      .then(function (buf) {
+        var start = firstSound(buf), src = ac.createBufferSource();
+        src.buffer = buf; src.loop = true;
+        // loop half a second in from the file's edges: the file carries a copy of the loop's
+        // opening after its end, and MP3 decoding is least exact right at the edges
+        src.loopStart = start + 0.5;
+        src.loopEnd = Math.min(start + 0.5 + LOOP_SECONDS, buf.duration);
+        src.connect(gain); src.start(0, start); started = true;
+        return true;
+      });
+    return loading;
+  }
+
+  function fadeTo(v, sec) {
+    var t = ac.currentTime;
+    gain.gain.cancelScheduledValues(t);
+    gain.gain.setValueAtTime(gain.gain.value, t);
+    gain.gain.linearRampToValueAtTime(v, t + sec);
+  }
+
+  // last resort: a plain looping <audio> element
+  function useFallback() {
+    if (!fallback) { fallback = new Audio(SRC); fallback.loop = true; fallback.setAttribute('playsinline', ''); }
+    var pr = fallback.play();
+    if (pr && pr.then) pr.then(function () { if (on) show('on'); }, function () { show('retry'); }); else show('on');
+  }
+
+  btn.addEventListener('click', function () {
+    if (on) {
+      show('off');
+      if (fallback) { fallback.pause(); return; }
+      if (ac) { fadeTo(0, 0.5); setTimeout(function () { if (!on) ac.suspend(); }, 600); }
+      if (keeper) keeper.pause();
+      return;
+    }
+    show('loading');
+    if (fallback) { useFallback(); return; }
+    if (!(window.AudioContext || window.webkitAudioContext) || !window.fetch) { useFallback(); return; }
+    unlock();
+    try { load(); } catch (e) { useFallback(); return; }
+    ac.resume();
+    loading.then(function () {
+      if (!on) return;
+      ac.resume().then(function () {
+        if (!on) return;
+        fadeTo(VOLUME, 1.2);
+        show(ac.state === 'running' ? 'on' : 'retry');
+      });
+    }, function () { loading = null; useFallback(); });
+  });
+
+  // pause while the tab is hidden, carry on when it comes back
+  document.addEventListener('visibilitychange', function () {
+    if (!on) return;
+    if (fallback) { if (document.hidden) fallback.pause(); else fallback.play().catch(function () {}); return; }
+    if (!ac || !started) return;
+    if (document.hidden) ac.suspend(); else ac.resume();
   });
 })();
 </script>
